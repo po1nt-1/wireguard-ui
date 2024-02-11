@@ -6,12 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
-	"net"
 	"net/http"
 	"os"
 	"strings"
-	"syscall"
 	"time"
+
+	"github.com/coreos/go-systemd/v22/activation"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/gommon/log"
@@ -269,6 +269,11 @@ func main() {
 	// serves other static files
 	app.GET(util.BasePath+"/static/*", echo.WrapHandler(http.StripPrefix(util.BasePath+"/static/", assetHandler)))
 
+	listeners, err := activation.Listeners()
+	if err != nil {
+		log.Fatalf("Error whilst checking for systemd socket activation %s", err)
+	}
+
 	initDeps := telegram.TgBotInitDependencies{
 		DB:                             db,
 		SendRequestedConfigsToTelegram: util.SendRequestedConfigsToTelegram,
@@ -277,17 +282,10 @@ func main() {
 	initTelegram(initDeps)
 
 	if strings.HasPrefix(util.BindAddress, "unix://") {
-		// Listen on unix domain socket.
-		// https://github.com/labstack/echo/issues/830
-		err := syscall.Unlink(util.BindAddress[6:])
-		if err != nil {
-			app.Logger.Fatalf("Cannot unlink unix socket: Error: %v", err)
+		if len(listeners) != 1 {
+			app.Logger.Fatalf("Unexpected number of socket activation fds (%d)", len(listeners))
 		}
-		l, err := net.Listen("unix", util.BindAddress[6:])
-		if err != nil {
-			app.Logger.Fatalf("Cannot create unix socket. Error: %v", err)
-		}
-		app.Listener = l
+		app.Listener = listeners[0]
 		app.Logger.Fatal(app.Start(""))
 	} else {
 		// Listen on TCP socket
